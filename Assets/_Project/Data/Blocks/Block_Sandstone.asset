@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0fed08878a38d04459f1f2881b12ea1e, type: 3}
+  m_Name: Block_Sandstone
+  m_EditorClassIdentifier: 
+  blockId: 21
+  blockName: Sandstone
+  isSolid: 1
+  isTransparent: 0
+  topTileIndex: 21
+  bottomTileIndex: 29
+  sideTileIndex: 28
+  topTexture: {fileID: 2800000, guid: fd2401bc0a3394f10bfb9e5b4fa11a1b, type: 3}
+  sideTexture: {fileID: 2800000, guid: 30dc6c9056a7b454f9ba3703b3bdbcf0, type: 3}
+  bottomTexture: {fileID: 2800000, guid: 93f320361bce84d9ca99de445c6cf60c, type: 3}
+  lightEmission: 0
+  hardness: 0.8
+  preferredToolType: 1

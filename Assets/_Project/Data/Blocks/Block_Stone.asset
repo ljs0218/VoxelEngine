@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0fed08878a38d04459f1f2881b12ea1e, type: 3}
+  m_Name: Block_Stone
+  m_EditorClassIdentifier: 
+  blockId: 3
+  blockName: Stone
+  isSolid: 1
+  isTransparent: 0
+  topTileIndex: 3
+  bottomTileIndex: 3
+  sideTileIndex: 3
+  topTexture: {fileID: 2800000, guid: beb2317edeb9a46daaf30def6b6d8a4e, type: 3}
+  sideTexture: {fileID: 2800000, guid: beb2317edeb9a46daaf30def6b6d8a4e, type: 3}
+  bottomTexture: {fileID: 2800000, guid: beb2317edeb9a46daaf30def6b6d8a4e, type: 3}
+  lightEmission: 0
+  hardness: 1.5
+  preferredToolType: 1

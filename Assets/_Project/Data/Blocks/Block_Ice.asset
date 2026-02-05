@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0fed08878a38d04459f1f2881b12ea1e, type: 3}
+  m_Name: Block_Ice
+  m_EditorClassIdentifier: 
+  blockId: 19
+  blockName: Ice
+  isSolid: 1
+  isTransparent: 1
+  topTileIndex: 19
+  bottomTileIndex: 19
+  sideTileIndex: 19
+  topTexture: {fileID: 2800000, guid: 6a28f5d6e33cb43679d548f714a2ab10, type: 3}
+  sideTexture: {fileID: 2800000, guid: 6a28f5d6e33cb43679d548f714a2ab10, type: 3}
+  bottomTexture: {fileID: 2800000, guid: 6a28f5d6e33cb43679d548f714a2ab10, type: 3}
+  lightEmission: 0
+  hardness: 0.5
+  preferredToolType: 1
