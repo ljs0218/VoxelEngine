@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -10,6 +11,19 @@ using VoxelEngine.Utilities;
 
 namespace VoxelEngine.World
 {
+    /// <summary>
+    /// Indicates the origin of a block change for network synchronization.
+    /// </summary>
+    public enum BlockChangeSource
+    {
+        /// <summary>Local player action — fires OnBlockChanged event for network broadcast.</summary>
+        Local,
+        /// <summary>Received from network — applies change WITHOUT firing OnBlockChanged (prevents broadcast loop).</summary>
+        Network,
+        /// <summary>Host-authoritative confirmation — applies change and fires OnBlockChanged for broadcast.</summary>
+        Authority
+    }
+
     /// <summary>
     /// Central world manager that handles chunk loading, unloading, and block access.
     /// Maintains a dictionary of loaded chunks indexed by ChunkCoord.
@@ -67,6 +81,30 @@ namespace VoxelEngine.World
         private bool lastStreamingCoordValid;
 
         public BlockRegistry BlockRegistry => blockRegistry;
+
+        // ==================== Network Events ====================
+
+        /// <summary>Fired when a block is changed locally or by authority. NOT fired for Network source (prevents broadcast loop).</summary>
+        public event Action<Vector3Int, byte, byte> OnBlockChanged;
+
+        /// <summary>Fired when a chunk finishes loading (from disk or network).</summary>
+        public event Action<ChunkCoord> OnChunkLoaded;
+
+        /// <summary>Fired when a chunk is unloaded.</summary>
+        public event Action<ChunkCoord> OnChunkUnloaded;
+
+        // ==================== Multiplayer State ====================
+
+        /// <summary>
+        /// When true, this instance acts as a multiplayer client.
+        /// Disables local chunk streaming and saving (controlled by network manager instead).
+        /// </summary>
+        public bool IsMultiplayerClient { get; private set; }
+
+        public void SetMultiplayerClient(bool value)
+        {
+            IsMultiplayerClient = value;
+        }
 
         /// <summary>
         /// The shared NativeArray of BlockInfo for Burst mesh generation.
@@ -134,13 +172,19 @@ namespace VoxelEngine.World
 
         private void OnApplicationQuit()
         {
-            SaveWorld();
+            if (!IsMultiplayerClient)
+            {
+                SaveWorld();
+            }
         }
 
         private void Update()
         {
             meshScheduler?.Update(maxMeshBuildsPerFrame);
             ProcessAsyncLoadResults();
+
+            // Multiplayer clients don't do local chunk streaming — network manager controls it
+            if (IsMultiplayerClient) return;
 
             if (trackTarget == null) return;
 
@@ -162,7 +206,7 @@ namespace VoxelEngine.World
             int processed = 0;
             while (processed < maxMeshBuildsPerFrame && asyncLoadResults.TryDequeue(out var result))
             {
-                pendingAsyncLoads.Remove(result.coord);
+                pendingAsyncLoads.TryRemove(result.coord, out _);
 
                 if (loadedChunks.ContainsKey(result.coord)) continue;
 
@@ -194,6 +238,7 @@ namespace VoxelEngine.World
                 }
 
                 chunk.RebuildMesh();
+                OnChunkLoaded?.Invoke(result.coord);
                 processed++;
             }
         }
@@ -253,7 +298,63 @@ namespace VoxelEngine.World
             }
 
             chunk.RebuildMesh();
+            OnChunkLoaded?.Invoke(coord);
             return chunk;
+        }
+
+        /// <summary>
+        /// Loads a chunk from network-received data (no disk I/O).
+        /// Used by clients to receive chunks from the host.
+        /// </summary>
+        public void LoadChunkFromNetwork(ChunkCoord coord, byte[] rawBlocks)
+        {
+            if (rawBlocks == null || rawBlocks.Length != VoxelConstants.ChunkBlockCount)
+            {
+                Debug.LogWarning($"[VoxelWorld] LoadChunkFromNetwork: Invalid block data for {coord}");
+                return;
+            }
+
+            // If already loaded, update existing chunk data
+            if (loadedChunks.TryGetValue(coord, out Chunk existing))
+            {
+                existing.ChunkData.SetRawBlocks(rawBlocks);
+                existing.ChunkData.ClearDirty();
+                if (blockInfos.IsCreated)
+                {
+                    LightEngine.InitializeSunlight(existing.ChunkData, blockInfos);
+                    LightEngine.InitializeBlockLights(existing.ChunkData, blockInfos, coord, this);
+                    LightEngine.PropagateSunlightCrossChunk(this, coord);
+                }
+                existing.RebuildMesh();
+                return;
+            }
+
+            ChunkData data = new ChunkData();
+            data.SetRawBlocks(rawBlocks);
+            data.ClearDirty();
+
+            if (data.IsEmpty())
+            {
+                data.Dispose();
+                return;
+            }
+
+            GameObject chunkObj = chunkPool.Get($"Chunk_{coord.x}_{coord.y}_{coord.z}");
+            Chunk chunk = chunkObj.GetComponent<Chunk>();
+            if (chunk == null) chunk = chunkObj.AddComponent<Chunk>();
+
+            chunk.Initialize(coord, data, blockRegistry, voxelMaterial, this, buildMesh: false);
+            loadedChunks[coord] = chunk;
+
+            if (blockInfos.IsCreated)
+            {
+                LightEngine.InitializeSunlight(data, blockInfos);
+                LightEngine.InitializeBlockLights(data, blockInfos, coord, this);
+                LightEngine.PropagateSunlightCrossChunk(this, coord);
+            }
+
+            chunk.RebuildMesh();
+            OnChunkLoaded?.Invoke(coord);
         }
 
         /// <summary>
@@ -264,6 +365,7 @@ namespace VoxelEngine.World
         {
             if (loadedChunks.TryGetValue(coord, out Chunk chunk))
             {
+                OnChunkUnloaded?.Invoke(coord);
                 meshScheduler?.CompleteAndRemove(coord);
 
                 if (chunk.ChunkData != null && chunk.ChunkData.IsDirty)
@@ -303,10 +405,19 @@ namespace VoxelEngine.World
         }
 
         /// <summary>
-        /// Sets a block at the given world position.
+        /// Sets a block at the given world position (defaults to Local source).
         /// Automatically updates lighting and rebuilds the affected chunk and any adjacent chunks.
         /// </summary>
         public void SetBlock(Vector3Int worldPos, byte blockType)
+        {
+            SetBlock(worldPos, blockType, BlockChangeSource.Local);
+        }
+
+        /// <summary>
+        /// Sets a block at the given world position with a specified change source.
+        /// Local/Authority sources fire OnBlockChanged; Network source does NOT (prevents broadcast loop).
+        /// </summary>
+        public void SetBlock(Vector3Int worldPos, byte blockType, BlockChangeSource source)
         {
             if (worldPos.y < 0 || worldPos.y >= VoxelConstants.ColumnHeight)
                 return;
@@ -319,7 +430,6 @@ namespace VoxelEngine.World
 
             if (chunk == null)
             {
-                // Auto-load chunk if setting a non-air block
                 if (blockType != BlockType.Air)
                 {
                     chunk = LoadChunk(coord);
@@ -333,7 +443,6 @@ namespace VoxelEngine.World
             Vector3Int local = ChunkCoord.WorldToLocal(worldPos);
             byte oldBlockType = chunk.ChunkData.GetBlock(local.x, local.y, local.z);
 
-            // Set the block data directly (without auto-rebuilding mesh)
             chunk.ChunkData.SetBlock(local.x, local.y, local.z, blockType);
 
             // Update lighting
@@ -343,19 +452,22 @@ namespace VoxelEngine.World
                 dirtyChunks = LightEngine.OnBlockChanged(this, worldPos, oldBlockType, blockType, blockInfos);
             }
 
-            // Rebuild the block's own chunk
             chunk.RebuildMesh();
 
-            // Rebuild all light-affected chunks
             foreach (var dirtyCoord in dirtyChunks)
             {
-                if (dirtyCoord.Equals(coord)) continue; // Already rebuilt above
+                if (dirtyCoord.Equals(coord)) continue;
                 Chunk dirtyChunk = GetChunk(dirtyCoord);
                 if (dirtyChunk != null) dirtyChunk.RebuildMesh();
             }
 
-            // Rebuild adjacent chunks if block is on a boundary
             RebuildAdjacentChunks(local, coord);
+
+            // Fire event for Local and Authority sources (NOT for Network — prevents broadcast loop)
+            if (source != BlockChangeSource.Network)
+            {
+                OnBlockChanged?.Invoke(worldPos, oldBlockType, blockType);
+            }
         }
 
         public void LoadChunksAround(Vector3 worldPos)
@@ -369,9 +481,9 @@ namespace VoxelEngine.World
                     for (int y = 0; y < VoxelConstants.SubChunksPerColumn; y++)
                     {
                         ChunkCoord coord = new ChunkCoord(center.x + x, y, center.z + z);
-                        if (!loadedChunks.ContainsKey(coord) && !pendingAsyncLoads.Contains(coord))
+                        if (!loadedChunks.ContainsKey(coord) && !pendingAsyncLoads.ContainsKey(coord))
                         {
-                            pendingAsyncLoads.Add(coord);
+                            pendingAsyncLoads.TryAdd(coord, 0);
                             string filePath = GetChunkFilePath(coord);
                             ChunkCoord capturedCoord = coord;
                             ChunkSerializer.LoadFromFileAsync(filePath).ContinueWith(task =>
@@ -384,7 +496,7 @@ namespace VoxelEngine.World
             }
         }
 
-        private readonly HashSet<ChunkCoord> pendingAsyncLoads = new HashSet<ChunkCoord>();
+        private readonly ConcurrentDictionary<ChunkCoord, byte> pendingAsyncLoads = new ConcurrentDictionary<ChunkCoord, byte>();
 
         private Chunk LoadChunkWithoutMesh(ChunkCoord coord)
         {
@@ -502,9 +614,12 @@ namespace VoxelEngine.World
 
         /// <summary>
         /// Saves all dirty chunks and world metadata to disk.
+        /// No-op for multiplayer clients (they don't own the world data).
         /// </summary>
         public void SaveWorld()
         {
+            if (IsMultiplayerClient) return;
+
             int savedCount = 0;
 
             foreach (var kvp in loadedChunks)
@@ -572,5 +687,29 @@ namespace VoxelEngine.World
         /// Returns the number of currently loaded chunks.
         /// </summary>
         public int LoadedChunkCount => loadedChunks.Count;
+
+        // ==================== Network Support ====================
+
+        /// <summary>
+        /// Returns all loaded chunks as RLE-serialized data.
+        /// Used by host to stream chunks to late-joining clients.
+        /// </summary>
+        public Dictionary<ChunkCoord, byte[]> GetAllLoadedChunkData()
+        {
+            var result = new Dictionary<ChunkCoord, byte[]>();
+            foreach (var kvp in loadedChunks)
+            {
+                if (kvp.Value.ChunkData != null)
+                {
+                    byte[] rawBlocks = kvp.Value.ChunkData.GetRawBlocks();
+                    byte[] rleData = ChunkSerializer.Serialize(rawBlocks);
+                    if (rleData != null)
+                    {
+                        result[kvp.Key] = rleData;
+                    }
+                }
+            }
+            return result;
+        }
     }
 }
